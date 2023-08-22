@@ -1,0 +1,41 @@
+name: SSL Expiry Check
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  schedule:
+    - cron: '35 9 * * *' # Runs daily at midnight UTC
+
+jobs:
+  ssl_expiry_check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+
+      - name: Install dependencies
+        run: npm install date-fns axios
+
+      - name: Run SSL expiry check
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          DOMAINS_LIST: ${{ secrets.DOMAINS_LIST }}
+        run: |
+          #!/bin/bash
+          IFS=',' read -ra domains <<< "${DOMAINS_LIST}"
+          for domain in "${domains[@]}"; do
+            expiration_date=$(openssl s_client -connect "${domain}:443" -servername "${domain}" 2>/dev/null | openssl x509 -noout -enddate | cut -d "=" -f 2)
+            expiration_unix=$(date -d "${expiration_date}" +%s)
+            current_unix=$(date +%s)
+            days_until_expiry=$(( (${expiration_unix} - ${current_unix}) / 86400 ))
+            
+            message="SSL Expiry Alert\n   * Domain : ${domain}\n   * Warning : The SSL certificate for ${domain} will expire in ${days_until_expiry} days."
+            
+            # Send message to Slack
+            curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"${message}\"}" "${SLACK_WEBHOOK_URL}"
+          done
